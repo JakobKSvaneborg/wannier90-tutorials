@@ -5,3 +5,5 @@
 *_band.gnu
 *_band.labelinfo.dat
 *.nnkp
+*.cube
+*.png
