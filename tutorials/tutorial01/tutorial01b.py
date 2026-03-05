@@ -203,19 +203,46 @@ print(f"  Max spread difference:  {spread_diff:.2e}")
 # ensures each reported centre is at a *valid* lattice image
 # of the true WF position, so the centres can always be shifted
 # by lattice vectors to a common unit cell.
+
+# Helper: shift a point by lattice vectors to be closest to a target
+cell = wan_ref.atoms.cell[:]
+ga_pos = wan_ref.atoms[[a.symbol == 'Ga' for a in wan_ref.atoms]].positions[0]
+
+
+def shift_to_nearest(point, target, cell):
+    best = point.copy()
+    best_d = np.linalg.norm(point - target)
+    for n1 in range(-4, 5):
+        for n2 in range(-4, 5):
+            for n3 in range(-4, 5):
+                shifted = point + n1 * cell[0] + n2 * cell[1] + n3 * cell[2]
+                d = np.linalg.norm(shifted - target)
+                if d < best_d:
+                    best_d = d
+                    best = shifted
+    return best
+
+
+# Shift all centers to the same Ga atom for a fair comparison
+centers_ref_shifted = [shift_to_nearest(c, ga_pos, cell) for c in centers_ref]
+centers_scr_shifted = [shift_to_nearest(c, ga_pos, cell)
+                       for c in centers_scrambled_final]
+
 print()
-print(f"  Ref centers (Angstrom):")
-for w in range(len(centers_ref)):
-    c = centers_ref[w]
+print(f"  Ref centers shifted to 1st cell (Angstrom):")
+for w, c in enumerate(centers_ref_shifted):
     print(f"    WF {w+1}: ({c[0]:7.4f}, {c[1]:7.4f}, {c[2]:7.4f})")
-print(f"  Scrambled centers (Angstrom):")
-for w in range(len(centers_scrambled_final)):
-    c = centers_scrambled_final[w]
+print(f"  Scrambled centers shifted to 1st cell (Angstrom):")
+for w, c in enumerate(centers_scr_shifted):
     print(f"    WF {w+1}: ({c[0]:7.4f}, {c[1]:7.4f}, {c[2]:7.4f})")
 print()
-print("  Note: The centres may be at different periodic images, but")
-print("  they can be shifted by lattice vectors to the same positions.")
-print("  The WFs are physically identical (same functional and spreads).")
+from scipy.optimize import linear_sum_assignment
+cost = np.array([[np.linalg.norm(np.array(cr) - np.array(cs))
+                  for cs in centers_scr_shifted]
+                 for cr in centers_ref_shifted])
+row_ind, col_ind = linear_sum_assignment(cost)
+max_center_diff = max(cost[r, c] for r, c in zip(row_ind, col_ind))
+print(f"  Max center difference:  {max_center_diff:.2e} Angstrom")
 
 tol = 1e-3
 if func_diff < tol and spread_diff < tol:
@@ -265,41 +292,11 @@ try:
     from scipy.optimize import linear_sum_assignment
 
     atoms = wan_scrambled.atoms
-    cell = atoms.cell[:]  # (3, 3) lattice vectors
-    Nw = wan_scrambled.nwannier
-
-    # Helper: shift a point by lattice vectors to be closest to a target
-    def shift_to_nearest(point, target, cell):
-        best = point.copy()
-        best_d = np.linalg.norm(point - target)
-        for n1 in range(-4, 5):
-            for n2 in range(-4, 5):
-                for n3 in range(-4, 5):
-                    shifted = point + n1 * cell[0] + n2 * cell[1] + n3 * cell[2]
-                    d = np.linalg.norm(shifted - target)
-                    if d < best_d:
-                        best_d = d
-                        best = shifted
-        return best
-
-    # (1) Use the SCRAMBLED converged centers for the final plot positions.
-    #
-    # The get_centers() method includes a branch-cut correction that
-    # ensures the returned centers are at valid lattice images of the
-    # true WF positions. The centers may be at distant periodic images,
-    # so we shift each one by lattice vectors to sit on the bonds of
-    # a single Ga atom.
-    final_plot = np.array([c.copy() for c in centers_scrambled_final])
-
-    # (2) Build cluster: the central Ga and its 4 nearest As neighbors.
-    ga_pos = atoms[[a.symbol == 'Ga' for a in atoms]].positions[0]
     as_pos = atoms[[a.symbol == 'As' for a in atoms]].positions[0]
-
-    # Shift each converged center by lattice vectors to be nearest
-    # to the Ga atom in the home unit cell.
     ga_center = ga_pos.copy()
-    for w in range(Nw):
-        final_plot[w] = shift_to_nearest(final_plot[w], ga_center, cell)
+
+    # Use pre-shifted converged centers for the plot
+    final_plot = np.array(centers_scr_shifted)
 
     # Generate As images and pick the 4 closest to this Ga
     as_images = []
@@ -347,19 +344,19 @@ try:
         ax2.scatter(*init_plot[w], s=60, c='steelblue',
                     marker='o', edgecolors='k', alpha=0.6, zorder=3)
 
-    # Plot reference converged centers (shifted to the same Ga)
-    ref_plot = np.array([c.copy() for c in centers_ref])
-    for w in range(Nw):
-        ref_plot[w] = shift_to_nearest(ref_plot[w], ga_center, cell)
+    # Use pre-shifted ref centers
+    ref_plot = np.array(centers_ref_shifted)
 
-    # Plot scrambled converged Wannier centers (red diamonds)
+    # Plot reference converged centers (gold stars, plotted first/larger
+    # so they remain visible behind the nearly-overlapping red diamonds)
     for w in range(Nw):
-        ax2.scatter(*final_plot[w], s=80, c='red', marker='D',
-                    edgecolors='k', zorder=4)
-
-    for w in range(Nw):
-        ax2.scatter(*ref_plot[w], s=80, c='gold', marker='*',
+        ax2.scatter(*ref_plot[w], s=250, c='gold', marker='*',
                     edgecolors='k', zorder=4, linewidths=0.5)
+
+    # Plot scrambled converged Wannier centers (red diamonds, smaller)
+    for w in range(Nw):
+        ax2.scatter(*final_plot[w], s=60, c='red', marker='D',
+                    edgecolors='k', zorder=5)
 
     # Draw arrows from scrambled-initial to converged centers
     for w in range(Nw):
