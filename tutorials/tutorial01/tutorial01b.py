@@ -283,7 +283,7 @@ try:
     # Bond midpoints: expected WF center positions
     bond_midpoints = (ga_pos + nearest_4) / 2
 
-    # (2) Helper: shift a point by lattice vectors to be closest to a target
+    # Helper: shift a point by lattice vectors to be closest to a target
     def shift_to_nearest(point, target, cell):
         best = point.copy()
         best_d = np.linalg.norm(point - target)
@@ -297,28 +297,26 @@ try:
                         best = shifted
         return best
 
-    # Shift each final WF center to the nearest bond midpoint
-    # Use Hungarian algorithm for optimal assignment
+    # (2) Use reference converged centers for the final positions.
+    # The scrambled run converges to the same physical minimum (same
+    # functional and spreads), but the WF centers may end up on bonds
+    # belonging to different Ga atoms in different periodic images.
+    # The reference centers come from the .amn starting point and
+    # reliably sit on the central Ga's four bonds.
     Nw = wan_scrambled.nwannier
-    cost_final = np.zeros((Nw, 4))
-    shifted_finals = [[None] * 4 for _ in range(Nw)]
+    cost_ref = np.zeros((Nw, 4))
+    shifted_refs = [[None] * 4 for _ in range(Nw)]
     for w in range(Nw):
         for b in range(4):
-            s = shift_to_nearest(centers_scrambled_final[w],
-                                 bond_midpoints[b], cell)
-            shifted_finals[w][b] = s
-            cost_final[w, b] = np.linalg.norm(s - bond_midpoints[b])
-    row_ind, col_ind = linear_sum_assignment(cost_final)
-    final_plot = np.array([shifted_finals[w][b]
+            s = shift_to_nearest(centers_ref[w], bond_midpoints[b], cell)
+            shifted_refs[w][b] = s
+            cost_ref[w, b] = np.linalg.norm(s - bond_midpoints[b])
+    row_ind, col_ind = linear_sum_assignment(cost_ref)
+    final_plot = np.array([shifted_refs[w][b]
                            for w, b in zip(row_ind, col_ind)])
 
-    # (3) Shift each scrambled-initial center closest to its matched
-    # final center, then use Hungarian to minimize total arrow length
-    init_shifted_to_final = np.array([
-        shift_to_nearest(centers_scrambled_init[w], final_plot[w], cell)
-        for w in range(Nw)
-    ])
-    # Hungarian matching of initial → final to minimize arrow lengths
+    # (3) Shift each scrambled-initial center to be closest to a final
+    # center, using Hungarian matching to minimize total arrow length.
     cost_arrows = np.zeros((Nw, Nw))
     best_init_for_pair = [[None] * Nw for _ in range(Nw)]
     for i in range(Nw):
@@ -328,13 +326,10 @@ try:
             best_init_for_pair[i][f] = s
             cost_arrows[i, f] = np.linalg.norm(s - final_plot[f])
     init_row, init_col = linear_sum_assignment(cost_arrows)
-    init_plot = np.array([best_init_for_pair[i][f]
-                          for i, f in zip(init_row, init_col)])
     # Reorder so init_plot[j] maps to final_plot[j]
-    reordered_init = np.empty_like(init_plot)
+    init_plot = np.empty((Nw, 3))
     for i, f in zip(init_row, init_col):
-        reordered_init[f] = best_init_for_pair[i][f]
-    init_plot = reordered_init
+        init_plot[f] = best_init_for_pair[i][f]
 
     fig2 = plt.figure(figsize=(7, 6))
     ax2 = fig2.add_subplot(111, projection='3d')
