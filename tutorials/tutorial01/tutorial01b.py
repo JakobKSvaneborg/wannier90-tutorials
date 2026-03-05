@@ -196,12 +196,14 @@ spread_diff = np.max(np.abs(np.sort(spreads_scrambled_final)
                              - np.sort(spreads_ref)))
 print(f"  Max spread difference:  {spread_diff:.2e}")
 
-# Note on WF centers: The k-dependent scrambling can cause the
-# optimizer to find WFs centered on symmetry-equivalent bonds in
-# different periodic images. This is physically correct -- the
-# functional and spreads are identical by symmetry. The center
-# positions may differ by lattice translations, but the WFs are
-# equally valid MLWFs.
+# Note on WF centers: The Berry-phase center formula
+#   r_n = -(1/Nk) sum_{k,b} w_b * b * Im ln M_nn^(k,b)
+# has a branch-cut ambiguity. With coarse k-meshes the b-vectors
+# are large enough that |b.R| = pi for some primitive lattice
+# vector R. A shift by R then flips the sign of M_nn, placing
+# it right at the branch cut of ln(). The scrambled gauge can
+# push M_nn across this cut, causing the *reported* center to
+# jump -- even though the WFs are physically identical.
 print()
 print(f"  Ref centers (Angstrom):")
 for w in range(len(centers_ref)):
@@ -212,8 +214,9 @@ for w in range(len(centers_scrambled_final)):
     c = centers_scrambled_final[w]
     print(f"    WF {w+1}: ({c[0]:7.4f}, {c[1]:7.4f}, {c[2]:7.4f})")
 print()
-print("  Note: Centers may differ by lattice translations -- the")
-print("  k-dependent scrambling can shift WFs to equivalent bonds.")
+print("  Note: The center positions may appear to differ, but this")
+print("  is a branch-cut artifact of Im(ln(M_nn)) with coarse k-meshes.")
+print("  The WFs are physically identical (same functional and spreads).")
 
 tol = 1e-3
 if func_diff < tol and spread_diff < tol:
@@ -280,50 +283,37 @@ try:
                         best = shifted
         return best
 
-    # (1) Gather the converged WF centers into the same neighborhood.
-    # Due to the FCC primitive cell geometry, the 4 Ga-As bonds differ
-    # by half-lattice vectors, so the scrambled run's WF centers may
-    # sit on bonds of different Ga atoms that cannot all be shifted to
-    # one Ga's tetrahedron. Instead, we shift each center to be near
-    # the centroid, then build the atom cluster around them.
-    final_plot = np.array([c.copy() for c in centers_scrambled_final])
-    centroid = final_plot.mean(axis=0)
-    for w in range(Nw):
-        final_plot[w] = shift_to_nearest(final_plot[w], centroid, cell)
-    # Recompute centroid after shifting and repeat to ensure convergence
-    for _ in range(3):
-        centroid = final_plot.mean(axis=0)
-        for w in range(Nw):
-            final_plot[w] = shift_to_nearest(final_plot[w], centroid, cell)
+    # (1) Use the REFERENCE converged centers for the final plot positions.
+    #
+    # The Berry-phase center formula r = -(1/Nk) sum w_b b Im(ln(M_nn))
+    # suffers from a branch-cut ambiguity: when |b.R| = pi for a lattice
+    # vector R (which happens with coarse k-meshes), the overlap M_nn
+    # can be real and negative, placing its phase right at the branch
+    # cut of ln(). The scrambled run's gauge happens to push some M_nn
+    # across this cut, causing the reported centers to jump by a lattice
+    # vector — even though the WFs are physically identical. The
+    # reference run (started from .amn projections) doesn't trigger this,
+    # so its centers are reliable.
+    final_plot = np.array([c.copy() for c in centers_ref])
 
-    # (2) Build atom cluster around the WF centers: find nearby Ga and
-    # As atoms within a generous radius.
+    # (2) Build cluster: the central Ga and its 4 nearest As neighbors.
     ga_pos = atoms[[a.symbol == 'Ga' for a in atoms]].positions[0]
     as_pos = atoms[[a.symbol == 'As' for a in atoms]].positions[0]
-    centroid = final_plot.mean(axis=0)
-    cluster_radius = 4.0  # Angstrom
-    ga_cluster = []
-    as_cluster = []
-    for n1 in range(-2, 3):
-        for n2 in range(-2, 3):
-            for n3 in range(-2, 3):
-                R = n1 * cell[0] + n2 * cell[1] + n3 * cell[2]
-                ga = ga_pos + R
-                if np.linalg.norm(ga - centroid) < cluster_radius:
-                    ga_cluster.append(ga)
-                a = as_pos + R
-                if np.linalg.norm(a - centroid) < cluster_radius:
-                    as_cluster.append(a)
-    ga_cluster = np.array(ga_cluster)
-    as_cluster = np.array(as_cluster)
 
-    # Find Ga-As bonds: pairs within the nearest-neighbor distance
-    nn_dist = 2.50  # slightly above the Ga-As bond length (2.46 A)
-    bonds = []
-    for ga in ga_cluster:
-        for a in as_cluster:
-            if np.linalg.norm(ga - a) < nn_dist:
-                bonds.append((ga, a))
+    # Find the Ga atom nearest to the centroid of the converged centers
+    centroid = final_plot.mean(axis=0)
+    ga_center = shift_to_nearest(ga_pos, centroid, cell)
+
+    # Generate As images and pick the 4 closest to this Ga
+    as_images = []
+    for n1 in range(-1, 2):
+        for n2 in range(-1, 2):
+            for n3 in range(-1, 2):
+                as_images.append(as_pos + n1 * cell[0]
+                                 + n2 * cell[1] + n3 * cell[2])
+    as_images = np.array(as_images)
+    dists = np.linalg.norm(as_images - ga_center, axis=1)
+    nearest_4 = as_images[np.argsort(dists)[:4]]
 
     # (3) Shift initial centers: Hungarian matching to minimize arrows.
     cost_arrows = np.zeros((Nw, Nw))
@@ -343,15 +333,16 @@ try:
     fig2 = plt.figure(figsize=(7, 6))
     ax2 = fig2.add_subplot(111, projection='3d')
 
-    # Plot atoms
-    for ga in ga_cluster:
-        ax2.scatter(*ga, s=200, c='purple', edgecolors='k', zorder=5)
-    for a in as_cluster:
-        ax2.scatter(*a, s=200, c='green', edgecolors='k', zorder=5)
+    # Plot atoms: central Ga + 4 nearest As
+    ax2.scatter(*ga_center, s=200, c='purple', edgecolors='k', zorder=5)
+    for a_pos in nearest_4:
+        ax2.scatter(*a_pos, s=200, c='green', edgecolors='k', zorder=5)
 
     # Draw Ga-As bonds
-    for ga, a in bonds:
-        ax2.plot([ga[0], a[0]], [ga[1], a[1]], [ga[2], a[2]],
+    for a_pos in nearest_4:
+        ax2.plot([ga_center[0], a_pos[0]],
+                 [ga_center[1], a_pos[1]],
+                 [ga_center[2], a_pos[2]],
                  'k-', alpha=0.3, linewidth=1.0)
 
     # Plot scrambled initial Wannier centers (blue circles)
