@@ -257,10 +257,72 @@ try:
     plot_path = tutorial_dir / 'tutorial01b_convergence.png'
     fig.savefig(plot_path, dpi=150)
     print(f"  Saved: {plot_path.name}")
+
+    # --- 3D plot: scrambled-initial vs converged WF centers ---
+    from matplotlib.lines import Line2D
+
+    atoms = wan_scrambled.atoms
+
+    fig2 = plt.figure(figsize=(7, 6))
+    ax2 = fig2.add_subplot(111, projection='3d')
+
+    # Plot atoms
+    for a in atoms:
+        color = 'purple' if a.symbol == 'Ga' else 'green'
+        ax2.scatter(*a.position, s=200, c=color, edgecolors='k', zorder=5)
+
+    # Plot scrambled initial Wannier centers (blue circles)
+    for w in range(wan_scrambled.nwannier):
+        ax2.scatter(*centers_scrambled_init[w], s=60, c='steelblue',
+                    marker='o', edgecolors='k', alpha=0.6, zorder=3)
+
+    # Plot converged Wannier centers (red diamonds)
+    for w in range(wan_scrambled.nwannier):
+        ax2.scatter(*centers_scrambled_final[w], s=80, c='red', marker='D',
+                    edgecolors='k', zorder=4)
+
+    # Draw arrows from scrambled-initial to converged centers
+    for w in range(wan_scrambled.nwannier):
+        dx = centers_scrambled_final[w] - centers_scrambled_init[w]
+        ax2.quiver(centers_scrambled_init[w][0],
+                   centers_scrambled_init[w][1],
+                   centers_scrambled_init[w][2],
+                   dx[0], dx[1], dx[2],
+                   color='orange', linewidth=1.5, arrow_length_ratio=0.15)
+
+    # Draw lines from each converged WF center to both atoms
+    for w in range(wan_scrambled.nwannier):
+        for a in atoms:
+            ax2.plot([centers_scrambled_final[w][0], a.position[0]],
+                     [centers_scrambled_final[w][1], a.position[1]],
+                     [centers_scrambled_final[w][2], a.position[2]],
+                     'k--', alpha=0.3, linewidth=0.8)
+
+    ax2.set_xlabel('x (A)')
+    ax2.set_ylabel('y (A)')
+    ax2.set_zlabel('z (A)')
+    ax2.set_title('Tutorial 01b: scrambled (blue) vs converged (red) WF centers\n'
+                  'Arrows show optimization path')
+
+    legend_elements = [
+        Line2D([0], [0], marker='o', color='w', markerfacecolor='purple',
+               markersize=10, label='Ga'),
+        Line2D([0], [0], marker='o', color='w', markerfacecolor='green',
+               markersize=10, label='As'),
+        Line2D([0], [0], marker='o', color='w', markerfacecolor='steelblue',
+               markersize=8, label='Scrambled initial WF center'),
+        Line2D([0], [0], marker='D', color='w', markerfacecolor='red',
+               markersize=8, label='Converged WF center'),
+    ]
+    ax2.legend(handles=legend_elements, fontsize=8)
+
+    plot2_path = tutorial_dir / 'tutorial01b_centers.png'
+    fig2.savefig(plot2_path, dpi=150)
+    print(f"  Saved: {plot2_path.name}")
     print()
 
 except ImportError:
-    print("  (matplotlib not available -- skipping plot)")
+    print("  (matplotlib not available -- skipping plots)")
     print()
 
 print("=" * 65)
