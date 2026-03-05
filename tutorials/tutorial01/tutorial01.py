@@ -427,6 +427,18 @@ if unk_files:
             # Normalize
             wannier_grid /= np.sqrt(wan.Nk)
 
+            # Translate the WF into the supercell so it's not split
+            # across periodic boundaries. We find the WF center in
+            # fractional coordinates of the supercell and roll the grid
+            # so the center sits near the middle of the cell.
+            large_cell = large_atoms.cell
+            center_cart = centers_final[w_idx]
+            center_frac = np.linalg.solve(large_cell.T, center_cart)
+            # Shift so center is at ~0.5 in fractional coords
+            shift_frac = 0.5 - (center_frac % 1.0)
+            shift_grid = np.round(shift_frac * largedim).astype(int)
+            wannier_grid = np.roll(wannier_grid, shift_grid, axis=(0, 1, 2))
+
             # Write cube file with |W(r)|
             cube_path = tutorial_dir / f'gaas_wannier_{w_idx+1}.cube'
             ase_write(
@@ -436,11 +448,12 @@ if unk_files:
             )
             wf_max = np.max(np.abs(wannier_grid))
             print(f"  WF {w_idx+1}: wrote {cube_path.name}"
-                  f"  (max |W| = {wf_max:.4f})")
+                  f"  (max |W| = {wf_max:.4f},"
+                  f" shifted by {shift_grid} grid pts)")
 
     print()
-    print("  Cube files contain |W(r)| and can be visualized with")
-    print("  VESTA, VMD, XCrySDen, or similar tools.")
+    print("  Cube files contain |W(r)|, translated to cell center.")
+    print("  Visualize with VESTA, VMD, XCrySDen, or similar tools.")
     print()
 
 else:
