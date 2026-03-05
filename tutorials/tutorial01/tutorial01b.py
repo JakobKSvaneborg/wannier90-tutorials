@@ -329,7 +329,7 @@ try:
 
     fig2 = plt.figure(figsize=(7, 6))
     ax2 = fig2.add_subplot(111, projection='3d')
-
+    ax2.view_init(elev=20, azim=75)
     # Plot atoms: central Ga + 4 nearest As
     ax2.scatter(*ga_center, s=200, c='purple', edgecolors='k', zorder=5)
     for a_pos in nearest_4:
@@ -351,14 +351,15 @@ try:
     ref_plot = np.array([c.copy() for c in centers_ref])
     for w in range(Nw):
         ref_plot[w] = shift_to_nearest(ref_plot[w], ga_center, cell)
-    for w in range(Nw):
-        ax2.scatter(*ref_plot[w], s=80, c='gold', marker='*',
-                    edgecolors='k', zorder=4, linewidths=0.5)
 
     # Plot scrambled converged Wannier centers (red diamonds)
     for w in range(Nw):
         ax2.scatter(*final_plot[w], s=80, c='red', marker='D',
                     edgecolors='k', zorder=4)
+
+    for w in range(Nw):
+        ax2.scatter(*ref_plot[w], s=80, c='gold', marker='*',
+                    edgecolors='k', zorder=4, linewidths=0.5)
 
     # Draw arrows from scrambled-initial to converged centers
     for w in range(Nw):
