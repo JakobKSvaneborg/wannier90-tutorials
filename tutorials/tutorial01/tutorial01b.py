@@ -347,7 +347,15 @@ try:
         ax2.scatter(*init_plot[w], s=60, c='steelblue',
                     marker='o', edgecolors='k', alpha=0.6, zorder=3)
 
-    # Plot converged Wannier centers (red diamonds)
+    # Plot reference converged centers (shifted to the same Ga)
+    ref_plot = np.array([c.copy() for c in centers_ref])
+    for w in range(Nw):
+        ref_plot[w] = shift_to_nearest(ref_plot[w], ga_center, cell)
+    for w in range(Nw):
+        ax2.scatter(*ref_plot[w], s=80, c='gold', marker='*',
+                    edgecolors='k', zorder=4, linewidths=0.5)
+
+    # Plot scrambled converged Wannier centers (red diamonds)
     for w in range(Nw):
         ax2.scatter(*final_plot[w], s=80, c='red', marker='D',
                     edgecolors='k', zorder=4)
@@ -372,8 +380,10 @@ try:
                markersize=10, label='As'),
         Line2D([0], [0], marker='o', color='w', markerfacecolor='steelblue',
                markersize=8, label='Scrambled initial WF center'),
+        Line2D([0], [0], marker='*', color='w', markerfacecolor='gold',
+               markersize=10, label='Reference converged center'),
         Line2D([0], [0], marker='D', color='w', markerfacecolor='red',
-               markersize=8, label='Converged WF center'),
+               markersize=8, label='Scrambled converged center'),
     ]
     ax2.legend(handles=legend_elements, fontsize=8)
 
