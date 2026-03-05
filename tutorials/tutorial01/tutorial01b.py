@@ -198,12 +198,11 @@ print(f"  Max spread difference:  {spread_diff:.2e}")
 
 # Note on WF centers: The Berry-phase center formula
 #   r_n = -(1/Nk) sum_{k,b} w_b * b * Im ln M_nn^(k,b)
-# has a branch-cut ambiguity. With coarse k-meshes the b-vectors
-# are large enough that |b.R| = pi for some primitive lattice
-# vector R. A shift by R then flips the sign of M_nn, placing
-# it right at the branch cut of ln(). The scrambled gauge can
-# push M_nn across this cut, causing the *reported* center to
-# jump -- even though the WFs are physically identical.
+# can place centres at different periodic images.  The
+# get_centers() method includes a branch-cut correction that
+# ensures each reported centre is at a *valid* lattice image
+# of the true WF position, so the centres can always be shifted
+# by lattice vectors to a common unit cell.
 print()
 print(f"  Ref centers (Angstrom):")
 for w in range(len(centers_ref)):
@@ -214,8 +213,8 @@ for w in range(len(centers_scrambled_final)):
     c = centers_scrambled_final[w]
     print(f"    WF {w+1}: ({c[0]:7.4f}, {c[1]:7.4f}, {c[2]:7.4f})")
 print()
-print("  Note: The center positions may appear to differ, but this")
-print("  is a branch-cut artifact of Im(ln(M_nn)) with coarse k-meshes.")
+print("  Note: The centres may be at different periodic images, but")
+print("  they can be shifted by lattice vectors to the same positions.")
 print("  The WFs are physically identical (same functional and spreads).")
 
 tol = 1e-3
@@ -273,9 +272,9 @@ try:
     def shift_to_nearest(point, target, cell):
         best = point.copy()
         best_d = np.linalg.norm(point - target)
-        for n1 in range(-2, 3):
-            for n2 in range(-2, 3):
-                for n3 in range(-2, 3):
+        for n1 in range(-4, 5):
+            for n2 in range(-4, 5):
+                for n3 in range(-4, 5):
                     shifted = point + n1 * cell[0] + n2 * cell[1] + n3 * cell[2]
                     d = np.linalg.norm(shifted - target)
                     if d < best_d:
@@ -283,26 +282,25 @@ try:
                         best = shifted
         return best
 
-    # (1) Use the REFERENCE converged centers for the final plot positions.
+    # (1) Use the SCRAMBLED converged centers for the final plot positions.
     #
-    # The Berry-phase center formula r = -(1/Nk) sum w_b b Im(ln(M_nn))
-    # suffers from a branch-cut ambiguity: when |b.R| = pi for a lattice
-    # vector R (which happens with coarse k-meshes), the overlap M_nn
-    # can be real and negative, placing its phase right at the branch
-    # cut of ln(). The scrambled run's gauge happens to push some M_nn
-    # across this cut, causing the reported centers to jump by a lattice
-    # vector — even though the WFs are physically identical. The
-    # reference run (started from .amn projections) doesn't trigger this,
-    # so its centers are reliable.
-    final_plot = np.array([c.copy() for c in centers_ref])
+    # The get_centers() method includes a branch-cut correction that
+    # ensures the returned centers are at valid lattice images of the
+    # true WF positions. The centers may be at distant periodic images,
+    # so we shift each one by lattice vectors to sit on the bonds of
+    # a single Ga atom.
+    final_plot = np.array([c.copy() for c in centers_scrambled_final])
 
     # (2) Build cluster: the central Ga and its 4 nearest As neighbors.
     ga_pos = atoms[[a.symbol == 'Ga' for a in atoms]].positions[0]
     as_pos = atoms[[a.symbol == 'As' for a in atoms]].positions[0]
 
-    # Find the Ga atom nearest to the centroid of the converged centers
-    centroid = final_plot.mean(axis=0)
-    ga_center = shift_to_nearest(ga_pos, centroid, cell)
+    # Shift each converged center to be nearest to a common Ga atom.
+    # First, pick the Ga image nearest to the first converged center.
+    ga_center = shift_to_nearest(ga_pos, final_plot[0], cell)
+    # Then shift all converged centers to be nearest to this Ga.
+    for w in range(Nw):
+        final_plot[w] = shift_to_nearest(final_plot[w], ga_center, cell)
 
     # Generate As images and pick the 4 closest to this Ga
     as_images = []
