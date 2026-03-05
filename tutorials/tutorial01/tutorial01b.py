@@ -295,10 +295,9 @@ try:
     ga_pos = atoms[[a.symbol == 'Ga' for a in atoms]].positions[0]
     as_pos = atoms[[a.symbol == 'As' for a in atoms]].positions[0]
 
-    # Shift each converged center to be nearest to a common Ga atom.
-    # First, pick the Ga image nearest to the first converged center.
-    ga_center = shift_to_nearest(ga_pos, final_plot[0], cell)
-    # Then shift all converged centers to be nearest to this Ga.
+    # Shift each converged center by lattice vectors to be nearest
+    # to the Ga atom in the home unit cell.
+    ga_center = ga_pos.copy()
     for w in range(Nw):
         final_plot[w] = shift_to_nearest(final_plot[w], ga_center, cell)
 
