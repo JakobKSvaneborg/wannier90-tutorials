@@ -1,19 +1,15 @@
 """
-Tutorial 01b: Verifying localization from a scrambled initial guess
-===================================================================
+Tutorial 03b: Verifying localization from a scrambled initial guess (Silicon)
+=============================================================================
 
-This companion to tutorial01.py tests whether the ASE Wannier localization
-procedure can recover the correct MLWFs even when starting from a poor
-initial guess. We take the well-converged .amn projections and apply a
-random unitary transformation to "jumble" the rotation matrices, then
-re-run localize() and verify that the optimizer finds the same minimum.
-
-This is a more stringent test than tutorial01.py, where the initial .amn
-guess was already near-optimal.
+Companion to tutorial 03. Silicon with 8 sp3 Wannier functions extracted
+from 12 bands (disentanglement). We apply a k-dependent random unitary
+transformation and verify that the optimizer recovers the same minimum.
 """
 
 import numpy as np
 from pathlib import Path
+from scipy.linalg import expm
 
 from ase.dft.wannier import Wannier
 
@@ -22,15 +18,16 @@ from ase.dft.wannier import Wannier
 # ---------------------------------------------------------------------------
 
 tutorial_dir = Path(__file__).resolve().parent
-seed = tutorial_dir / 'gaas'
+seed = tutorial_dir / 'silicon'
 
 print("=" * 65)
-print("  Tutorial 01b: Localization from a scrambled initial guess")
+print("  Tutorial 03b: Localization from a scrambled initial guess")
+print("  System: Silicon, 8 sp3 WFs from 12 bands")
 print("=" * 65)
 print()
 
 # ---------------------------------------------------------------------------
-# 1. Reference run: localize from .amn projections (the good initial guess)
+# 1. Reference run
 # ---------------------------------------------------------------------------
 
 print("Reference: localize from .amn projections...")
@@ -48,25 +45,12 @@ centers_ref = wan_ref.get_centers()
 print(f"  Initial functional:  {functional_ref_init:.6f}")
 print(f"  Converged functional: {functional_ref_final:.6f}")
 print(f"  Converged spreads:   {spreads_ref}")
+print(f"  nbands={wan_ref.nbands}, nwannier={wan_ref.nwannier}")
 print()
 
 # ---------------------------------------------------------------------------
-# 2. Scrambled run: apply random unitary to rotation matrices
+# 2. Scrambled run: apply k-dependent random unitary
 # ---------------------------------------------------------------------------
-# We create a fresh Wannier object from .amn, then replace U_kww[k]
-# with U_kww[k] @ R(k) for a k-dependent random unitary R(k). This
-# changes the gauge differently at each k-point, which is a stronger
-# test than a global (k-independent) rotation.
-#
-# To make R(k) vary smoothly with k (as a physical gauge change would),
-# we generate it as R(k) = expm(i * H(k)) where H(k) is a Hermitian
-# matrix that interpolates smoothly across the k-mesh:
-#   H(k) = strength * sum_j c_j * cos(2*pi*k . n_j + phi_j) * A_j
-# with random coefficients c_j, phase offsets phi_j, lattice vectors
-# n_j, and basis Hermitian matrices A_j. The 'strength' parameter
-# controls how far from the identity each R(k) is. We use cos + random
-# phases instead of sin, since sin(2*pi*k.n) vanishes for Gamma-centered
-# grids where k-components are 0 or 0.5.
 
 print("Scrambled: applying k-dependent random unitary transformation...")
 rng = np.random.default_rng(seed=42)
@@ -79,11 +63,8 @@ wan_scrambled = Wannier.from_wannier90(
 
 Nw = wan_scrambled.nwannier
 Nk = wan_scrambled.Nk
-kpts = -wan_scrambled.kpt_kc  # un-negate to get original W90 k-points
+kpts = -wan_scrambled.kpt_kc
 
-# Build a basis of Hermitian matrices for the Lie algebra of U(Nw)
-# We use Nw^2 generators: Nw diagonal + Nw*(Nw-1)/2 symmetric off-diag
-# + Nw*(Nw-1)/2 antisymmetric off-diag
 basis = []
 for i in range(Nw):
     H = np.zeros((Nw, Nw), complex)
@@ -100,23 +81,17 @@ for i in range(Nw):
         H_anti[j, i] = -1j
         basis.append(H_anti)
 
-# Random mixing directions: for each basis matrix, pick a random
-# reciprocal lattice direction, amplitude, and phase offset
 n_terms = len(basis)
-directions = rng.integers(-1, 2, size=(n_terms, 3))  # small G-vectors
+directions = rng.integers(-1, 2, size=(n_terms, 3))
 amplitudes = rng.uniform(-1, 1, size=n_terms)
-phases = rng.uniform(0, 2 * np.pi, size=n_terms)  # random phase offsets
-strength = 1.5  # controls overall scrambling magnitude
-
-from scipy.linalg import expm
+phases = rng.uniform(0, 2 * np.pi, size=n_terms)
+strength = 1.5
 
 for k in range(Nk):
-    # Build H(k) = strength * sum_j amp_j * cos(2*pi*k.n_j + phi_j) * A_j
     H_k = np.zeros((Nw, Nw), complex)
     for j in range(n_terms):
         f = np.cos(2 * np.pi * np.dot(kpts[k], directions[j]) + phases[j])
         H_k += strength * amplitudes[j] * f * basis[j]
-    # R(k) = expm(i * H(k)) is unitary since H(k) is Hermitian
     R_k = expm(1j * H_k)
     wan_scrambled.wannier_state.U_kww[k] = (
         wan_scrambled.wannier_state.U_kww[k] @ R_k
@@ -126,23 +101,17 @@ wan_scrambled.update()
 
 functional_scrambled_init = wan_scrambled.get_functional_value()
 spreads_scrambled_init = wan_scrambled.get_spreads()
-centers_scrambled_init = wan_scrambled.get_centers()
 
 print(f"  Scrambled initial functional: {functional_scrambled_init:.6f}"
       f"  (vs reference: {functional_ref_init:.6f})")
 print(f"  Scrambled initial spreads:    {spreads_scrambled_init}")
 print()
-print(f"  The scrambled functional is much lower (= less localized)")
-print(f"  than the .amn starting point, confirming the mixing worked.")
-print()
 
 # ---------------------------------------------------------------------------
 # 3. Localize from the scrambled starting point
 # ---------------------------------------------------------------------------
-# Record convergence history via a custom logger
 
 class HistoryLogger:
-    """Captures per-iteration functional values from MDmin output."""
     def __init__(self):
         self.values = []
     def __call__(self, *args):
@@ -154,7 +123,6 @@ class HistoryLogger:
                     self.values.append(float(part.split('=')[1]))
 
 
-# Also record the reference convergence for comparison
 wan_ref2 = Wannier.from_wannier90(
     seed=str(seed),
     initialwannier='amn',
@@ -166,7 +134,6 @@ wan_ref2.log = ref_logger
 wan_ref2.localize(step=0.25, tolerance=1e-10)
 ref_history.extend(ref_logger.values)
 
-# Now localize the scrambled version
 print("Localizing from scrambled starting point...")
 scrambled_history = [functional_scrambled_init]
 scrambled_logger = HistoryLogger()
@@ -184,7 +151,7 @@ print(f"  Converged spreads:   {spreads_scrambled_final}")
 print()
 
 # ---------------------------------------------------------------------------
-# 4. Compare: did the optimizer recover the correct minimum?
+# 4. Compare results
 # ---------------------------------------------------------------------------
 
 print("Comparison of converged results:")
@@ -196,12 +163,6 @@ spread_diff = np.max(np.abs(np.sort(spreads_scrambled_final)
                              - np.sort(spreads_ref)))
 print(f"  Max spread difference:  {spread_diff:.2e}")
 
-# Note on WF centers: The k-dependent scrambling can cause the
-# optimizer to find WFs centered on symmetry-equivalent bonds in
-# different periodic images. This is physically correct -- the
-# functional and spreads are identical by symmetry. The center
-# positions may differ by lattice translations, but the WFs are
-# equally valid MLWFs.
 print()
 print(f"  Ref centers (Angstrom):")
 for w in range(len(centers_ref)):
@@ -220,8 +181,8 @@ if func_diff < tol and spread_diff < tol:
     print(f"\n  SUCCESS: Both runs converged to the same minimum!")
     print(f"  (functional and spreads match to within {tol})")
 else:
-    print(f"\n  Note: Small differences may remain due to local minima")
-    print(f"  or convergence tolerance.")
+    print(f"\n  Note: Differences remain -- may indicate local minima")
+    print(f"  or insufficient convergence.")
 print()
 
 # ---------------------------------------------------------------------------
@@ -249,12 +210,12 @@ try:
 
     ax.set_xlabel('Optimization step')
     ax.set_ylabel('Localization functional')
-    ax.set_title('Tutorial 01b: Convergence from good vs scrambled start')
+    ax.set_title('Tutorial 03b: Silicon — Convergence from good vs scrambled start')
     ax.legend(fontsize=9)
     ax.grid(True, alpha=0.3)
     fig.tight_layout()
 
-    plot_path = tutorial_dir / 'tutorial01b_convergence.png'
+    plot_path = tutorial_dir / 'tutorial03b_convergence.png'
     fig.savefig(plot_path, dpi=150)
     print(f"  Saved: {plot_path.name}")
     print()
@@ -264,5 +225,5 @@ except ImportError:
     print()
 
 print("=" * 65)
-print("  Tutorial 01b complete!")
+print("  Tutorial 03b complete!")
 print("=" * 65)
