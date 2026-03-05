@@ -260,43 +260,113 @@ try:
 
     # --- 3D plot: scrambled-initial vs converged WF centers ---
     from matplotlib.lines import Line2D
+    from scipy.optimize import linear_sum_assignment
 
     atoms = wan_scrambled.atoms
+    cell = atoms.cell[:]  # (3, 3) lattice vectors
+
+    # (1) Build cluster: central Ga and its 4 nearest As neighbors
+    ga_pos = atoms[[a.symbol == 'Ga' for a in atoms]].positions[0]
+    as_pos = atoms[[a.symbol == 'As' for a in atoms]].positions[0]
+
+    # Generate As images and pick the 4 closest to Ga
+    as_images = []
+    for n1 in range(-1, 2):
+        for n2 in range(-1, 2):
+            for n3 in range(-1, 2):
+                as_images.append(as_pos + n1 * cell[0]
+                                 + n2 * cell[1] + n3 * cell[2])
+    as_images = np.array(as_images)
+    dists = np.linalg.norm(as_images - ga_pos, axis=1)
+    nearest_4 = as_images[np.argsort(dists)[:4]]
+
+    # Bond midpoints: expected WF center positions
+    bond_midpoints = (ga_pos + nearest_4) / 2
+
+    # (2) Helper: shift a point by lattice vectors to be closest to a target
+    def shift_to_nearest(point, target, cell):
+        best = point.copy()
+        best_d = np.linalg.norm(point - target)
+        for n1 in range(-2, 3):
+            for n2 in range(-2, 3):
+                for n3 in range(-2, 3):
+                    shifted = point + n1 * cell[0] + n2 * cell[1] + n3 * cell[2]
+                    d = np.linalg.norm(shifted - target)
+                    if d < best_d:
+                        best_d = d
+                        best = shifted
+        return best
+
+    # Shift each final WF center to the nearest bond midpoint
+    # Use Hungarian algorithm for optimal assignment
+    Nw = wan_scrambled.nwannier
+    cost_final = np.zeros((Nw, 4))
+    shifted_finals = [[None] * 4 for _ in range(Nw)]
+    for w in range(Nw):
+        for b in range(4):
+            s = shift_to_nearest(centers_scrambled_final[w],
+                                 bond_midpoints[b], cell)
+            shifted_finals[w][b] = s
+            cost_final[w, b] = np.linalg.norm(s - bond_midpoints[b])
+    row_ind, col_ind = linear_sum_assignment(cost_final)
+    final_plot = np.array([shifted_finals[w][b]
+                           for w, b in zip(row_ind, col_ind)])
+
+    # (3) Shift each scrambled-initial center closest to its matched
+    # final center, then use Hungarian to minimize total arrow length
+    init_shifted_to_final = np.array([
+        shift_to_nearest(centers_scrambled_init[w], final_plot[w], cell)
+        for w in range(Nw)
+    ])
+    # Hungarian matching of initial → final to minimize arrow lengths
+    cost_arrows = np.zeros((Nw, Nw))
+    best_init_for_pair = [[None] * Nw for _ in range(Nw)]
+    for i in range(Nw):
+        for f in range(Nw):
+            s = shift_to_nearest(centers_scrambled_init[i],
+                                 final_plot[f], cell)
+            best_init_for_pair[i][f] = s
+            cost_arrows[i, f] = np.linalg.norm(s - final_plot[f])
+    init_row, init_col = linear_sum_assignment(cost_arrows)
+    init_plot = np.array([best_init_for_pair[i][f]
+                          for i, f in zip(init_row, init_col)])
+    # Reorder so init_plot[j] maps to final_plot[j]
+    reordered_init = np.empty_like(init_plot)
+    for i, f in zip(init_row, init_col):
+        reordered_init[f] = best_init_for_pair[i][f]
+    init_plot = reordered_init
 
     fig2 = plt.figure(figsize=(7, 6))
     ax2 = fig2.add_subplot(111, projection='3d')
 
-    # Plot atoms
-    for a in atoms:
-        color = 'purple' if a.symbol == 'Ga' else 'green'
-        ax2.scatter(*a.position, s=200, c=color, edgecolors='k', zorder=5)
+    # Plot atoms: central Ga + 4 nearest As
+    ax2.scatter(*ga_pos, s=200, c='purple', edgecolors='k', zorder=5)
+    for a_pos in nearest_4:
+        ax2.scatter(*a_pos, s=200, c='green', edgecolors='k', zorder=5)
+
+    # Draw Ga-As bonds
+    for a_pos in nearest_4:
+        ax2.plot([ga_pos[0], a_pos[0]],
+                 [ga_pos[1], a_pos[1]],
+                 [ga_pos[2], a_pos[2]],
+                 'k-', alpha=0.3, linewidth=1.0)
 
     # Plot scrambled initial Wannier centers (blue circles)
-    for w in range(wan_scrambled.nwannier):
-        ax2.scatter(*centers_scrambled_init[w], s=60, c='steelblue',
+    for w in range(Nw):
+        ax2.scatter(*init_plot[w], s=60, c='steelblue',
                     marker='o', edgecolors='k', alpha=0.6, zorder=3)
 
     # Plot converged Wannier centers (red diamonds)
-    for w in range(wan_scrambled.nwannier):
-        ax2.scatter(*centers_scrambled_final[w], s=80, c='red', marker='D',
+    for w in range(Nw):
+        ax2.scatter(*final_plot[w], s=80, c='red', marker='D',
                     edgecolors='k', zorder=4)
 
     # Draw arrows from scrambled-initial to converged centers
-    for w in range(wan_scrambled.nwannier):
-        dx = centers_scrambled_final[w] - centers_scrambled_init[w]
-        ax2.quiver(centers_scrambled_init[w][0],
-                   centers_scrambled_init[w][1],
-                   centers_scrambled_init[w][2],
+    for w in range(Nw):
+        dx = final_plot[w] - init_plot[w]
+        ax2.quiver(init_plot[w][0], init_plot[w][1], init_plot[w][2],
                    dx[0], dx[1], dx[2],
                    color='orange', linewidth=1.5, arrow_length_ratio=0.15)
-
-    # Draw lines from each converged WF center to both atoms
-    for w in range(wan_scrambled.nwannier):
-        for a in atoms:
-            ax2.plot([centers_scrambled_final[w][0], a.position[0]],
-                     [centers_scrambled_final[w][1], a.position[1]],
-                     [centers_scrambled_final[w][2], a.position[2]],
-                     'k--', alpha=0.3, linewidth=0.8)
 
     ax2.set_xlabel('x (A)')
     ax2.set_ylabel('y (A)')
