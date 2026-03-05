@@ -257,7 +257,9 @@ try:
     fig.savefig(plot_path, dpi=150)
     print(f"  Saved: {plot_path.name}")
 
-    # --- 3D plot of WF centers and atomic positions ---
+    # --- 3D plot: initial vs final WF centers ---
+    from matplotlib.lines import Line2D
+
     fig2 = plt.figure(figsize=(7, 6))
     ax2 = fig2.add_subplot(111, projection='3d')
 
@@ -266,12 +268,26 @@ try:
         color = 'purple' if a.symbol == 'Ga' else 'green'
         ax2.scatter(*a.position, s=200, c=color, edgecolors='k', zorder=5)
 
-    # Plot Wannier centers
+    # Plot initial Wannier centers (blue circles)
+    for w in range(wan.nwannier):
+        ax2.scatter(*centers_init[w], s=60, c='steelblue', marker='o',
+                    edgecolors='k', alpha=0.6, zorder=3)
+
+    # Plot final Wannier centers (red diamonds)
     for w in range(wan.nwannier):
         ax2.scatter(*centers_final[w], s=80, c='red', marker='D',
                     edgecolors='k', zorder=4)
 
-    # Draw lines from each WF center to both atoms (bond skeleton)
+    # Draw arrows from initial to final centers to show the shift
+    for w in range(wan.nwannier):
+        dx = centers_final[w] - centers_init[w]
+        # Scale arrow for visibility (the shifts are small)
+        scale = 50
+        ax2.quiver(centers_init[w][0], centers_init[w][1], centers_init[w][2],
+                    dx[0] * scale, dx[1] * scale, dx[2] * scale,
+                    color='orange', linewidth=1.5, arrow_length_ratio=0.3)
+
+    # Draw lines from each final WF center to both atoms (bond skeleton)
     for w in range(wan.nwannier):
         for a in atoms:
             ax2.plot([centers_final[w][0], a.position[0]],
@@ -282,19 +298,20 @@ try:
     ax2.set_xlabel('x (A)')
     ax2.set_ylabel('y (A)')
     ax2.set_zlabel('z (A)')
-    ax2.set_title('GaAs: Wannier function centers (red)\n'
-                   'and atomic positions (Ga=purple, As=green)')
+    ax2.set_title('GaAs: initial (blue) vs final (red) WF centers\n'
+                   'Arrows show optimization direction (x50 scale)')
 
-    from matplotlib.lines import Line2D
     legend_elements = [
         Line2D([0], [0], marker='o', color='w', markerfacecolor='purple',
                markersize=10, label='Ga'),
         Line2D([0], [0], marker='o', color='w', markerfacecolor='green',
                markersize=10, label='As'),
+        Line2D([0], [0], marker='o', color='w', markerfacecolor='steelblue',
+               markersize=8, label='Initial WF center'),
         Line2D([0], [0], marker='D', color='w', markerfacecolor='red',
-               markersize=8, label='WF center'),
+               markersize=8, label='Final WF center'),
     ]
-    ax2.legend(handles=legend_elements)
+    ax2.legend(handles=legend_elements, fontsize=8)
 
     plot2_path = tutorial_dir / 'tutorial01_centers.png'
     fig2.savefig(plot2_path, dpi=150)
@@ -306,7 +323,133 @@ except ImportError:
     print()
 
 # ---------------------------------------------------------------------------
-# 9. Save the optimized state
+# 9. Construct Wannier functions from UNK files and write cube files
+# ---------------------------------------------------------------------------
+# The ASE Wannier.get_function() method requires a DFT calculator, which
+# is not available when loading from Wannier90 files. However, the tutorial
+# provides UNK files (Bloch wavefunctions on a real-space grid), so we can
+# reconstruct the Wannier functions manually using the same algorithm:
+#
+#   W_n(r) = (1/sqrt(Nk)) * sum_k exp(-i*k*R) * sum_m V_{k,m,n} * psi_{m,k}(r)
+#
+# where V_{k,m,n} = C_{k,m,l} * U_{k,l,n} is the full rotation matrix and
+# the sum over R tiles the wavefunction into the large (2x2x2) supercell.
+
+
+def read_unk(filepath):
+    """Read a Wannier90 UNK file (formatted/ASCII).
+
+    Returns:
+        ngx, ngy, ngz: Grid dimensions
+        ik: k-point index (1-based)
+        nbnd: Number of bands
+        psi: Complex array of shape (nbnd, ngx, ngy, ngz)
+    """
+    with open(filepath) as f:
+        header = f.readline().split()
+        ngx, ngy, ngz, ik, nbnd = [int(x) for x in header]
+        npts = ngx * ngy * ngz
+        psi = np.empty((nbnd, ngx, ngy, ngz), dtype=complex)
+        for band in range(nbnd):
+            data = []
+            while len(data) < npts:
+                line = f.readline().split()
+                data.append(complex(float(line[0]), float(line[1])))
+            # UNK files use Fortran ordering: x varies fastest
+            psi[band] = np.array(data).reshape((ngx, ngy, ngz), order='F')
+    return ngx, ngy, ngz, ik, nbnd, psi
+
+
+# Check for UNK files
+unk_files = sorted(tutorial_dir.glob('UNK*'))
+if unk_files:
+    print(f"Found {len(unk_files)} UNK files -- constructing Wannier functions")
+    print()
+
+    # Read all UNK files (one per k-point)
+    # V_knw gives the full rotation: psi -> Wannier
+    V_knw = wan.V_knw  # shape: (Nk, nbands, nwannier)
+    kpt_kc = wan.kpt_kc  # k-points in ASE convention (negated)
+    N1, N2, N3 = wan.kptgrid  # supercell repeats (2, 2, 2)
+
+    # Read the first UNK to get grid dimensions
+    ngx, ngy, ngz, _, nbnd, _ = read_unk(unk_files[0])
+    print(f"  Real-space grid per unit cell: {ngx} x {ngy} x {ngz}")
+    print(f"  Supercell: {N1} x {N2} x {N3} = large cell for Wannier functions")
+
+    # Read Bloch states for all k-points
+    psi_kn = {}  # dict: ik (0-based) -> (nbnd, ngx, ngy, ngz) complex array
+    for unkfile in unk_files:
+        _, _, _, ik_1based, _, psi = read_unk(unkfile)
+        psi_kn[ik_1based - 1] = psi  # convert to 0-based
+
+    # Construct each Wannier function on the supercell grid
+    largedim = np.array([ngx * N1, ngy * N2, ngz * N3])
+    print(f"  Supercell grid: {largedim[0]} x {largedim[1]} x {largedim[2]}")
+    print()
+
+    # Build the supercell Atoms for the cube file header
+    from ase import Atoms as AseAtoms
+    large_atoms = atoms.repeat((N1, N2, N3))
+
+    from ase.io import write as ase_write
+
+    for w_idx in range(wan.nwannier):
+        wannier_grid = np.zeros(largedim, dtype=complex)
+
+        for k in range(wan.Nk):
+            if k not in psi_kn:
+                print(f"  Warning: UNK file for k-point {k+1} not found, "
+                      "skipping cube output")
+                break
+
+            # Combine Bloch states with rotation coefficients
+            vec_n = V_knw[k, :, w_idx]  # (nbands,) coefficients
+            wan_G = np.zeros((ngx, ngy, ngz), dtype=complex)
+            for n in range(wan.nbands):
+                wan_G += vec_n[n] * psi_kn[k][n]
+
+            # Tile into the supercell with Bloch phase factors
+            for n1 in range(N1):
+                for n2 in range(N2):
+                    for n3 in range(N3):
+                        phase = np.exp(
+                            -2.0j * np.pi
+                            * np.dot([n1, n2, n3], kpt_kc[k])
+                        )
+                        wannier_grid[
+                            n1 * ngx:(n1 + 1) * ngx,
+                            n2 * ngy:(n2 + 1) * ngy,
+                            n3 * ngz:(n3 + 1) * ngz,
+                        ] += phase * wan_G
+
+        else:
+            # Normalize
+            wannier_grid /= np.sqrt(wan.Nk)
+
+            # Write cube file with |W(r)|
+            cube_path = tutorial_dir / f'gaas_wannier_{w_idx+1}.cube'
+            ase_write(
+                str(cube_path),
+                large_atoms,
+                data=np.abs(wannier_grid),
+            )
+            wf_max = np.max(np.abs(wannier_grid))
+            print(f"  WF {w_idx+1}: wrote {cube_path.name}"
+                  f"  (max |W| = {wf_max:.4f})")
+
+    print()
+    print("  Cube files contain |W(r)| and can be visualized with")
+    print("  VESTA, VMD, XCrySDen, or similar tools.")
+    print()
+
+else:
+    print("No UNK files found -- skipping cube file generation.")
+    print("  (UNK files are needed to reconstruct Wannier functions on a grid)")
+    print()
+
+# ---------------------------------------------------------------------------
+# 10. Save the optimized state
 # ---------------------------------------------------------------------------
 
 save_path = tutorial_dir / 'gaas_wannier_state.json'
