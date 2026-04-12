@@ -2,7 +2,7 @@
 Tutorial 01b: Verifying localization from a scrambled initial guess
 ===================================================================
 
-This companion to tutorial01.py tests whether the ASE Wannier localization
+This companion to tutorial01.py tests whether the ezwannier localization
 procedure can recover the correct MLWFs even when starting from a poor
 initial guess. We take the well-converged .amn projections and apply a
 random unitary transformation to "jumble" the rotation matrices, then
@@ -15,7 +15,7 @@ guess was already near-optimal.
 import numpy as np
 from pathlib import Path
 
-from ase.dft.wannier import Wannier
+from ezwannier import Wannier
 
 # ---------------------------------------------------------------------------
 # 0. Setup
