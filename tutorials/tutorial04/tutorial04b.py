@@ -11,7 +11,7 @@ import numpy as np
 from pathlib import Path
 from scipy.linalg import expm
 
-from ase.dft.wannier import Wannier
+from ezwannier import Wannier
 
 # ---------------------------------------------------------------------------
 # 0. Setup
